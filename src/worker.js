@@ -1,4 +1,4 @@
-// language: JavaScript, runtime: Cloudflare Workers, target: https://www.image2url.com/tools scraper & uploader
+// language: JavaScript, runtime: Cloudflare Workers, target: https://www.image2url.com/tools scraper & reliable uploader
 
 const CREATOR = "Creator - 👨‍💻 SHADOW MOVIE X MAIN OWNER 👨‍💻";
 const BASE_URL = "https://www.image2url.com";
@@ -202,7 +202,7 @@ async function scrape_tools_page(targetPageUrl = TOOLS_URL) {
   };
 }
 
-function extract_url_from_upload_response(data, rawText = "") {
+function extract_url_from_text_or_obj(data, rawText = "") {
   if (data && typeof data === "object") {
     const candidates = [
       data.url,
@@ -223,12 +223,93 @@ function extract_url_from_upload_response(data, rawText = "") {
     }
   }
 
-  const textMatch = String(rawText || "").match(
-    /https?:\/\/(?:www\.)?image2url\.com\/[^\s"'<>`\\)]+/i
-  );
-  if (textMatch) return textMatch[0];
+  const directMatch = String(rawText || "").trim().match(/^https?:\/\/[^\s"'<>`\\)]+$/i);
+  if (directMatch) return directMatch[0];
+
+  const anyMatch = String(rawText || "").match(/https?:\/\/[^\s"'<>`\\)]+/i);
+  if (anyMatch) return anyMatch[0].replace(/[,;]+$/, "");
 
   return null;
+}
+
+async function try_image2url_upload(file, toolHint) {
+  try {
+    const forwardForm = new FormData();
+    forwardForm.append("file", file, file.name || "upload.bin");
+    if (toolHint) forwardForm.append("tool", String(toolHint));
+
+    const res = await fetch(UPLOAD_API, {
+      method: "POST",
+      body: forwardForm,
+      headers: {
+        "User-Agent": UA,
+        Origin: BASE_URL,
+        Referer: TOOLS_URL,
+      },
+    });
+    const rawText = await res.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (_) {
+      parsed = { rawText, status: res.status };
+    }
+    const url = extract_url_from_text_or_obj(parsed, rawText);
+    return { provider: "image2url", url, upstream: parsed };
+  } catch (e) {
+    return { provider: "image2url", url: null, error: e.message };
+  }
+}
+
+async function try_fallback_hosts(file) {
+  const fileName = file.name || "upload.bin";
+
+  // Fallback 1: uguu.se
+  try {
+    const f1 = new FormData();
+    f1.append("files[]", file, fileName);
+    const r1 = await fetch("https://uguu.se/upload", {
+      method: "POST",
+      body: f1,
+      headers: { "User-Agent": UA },
+    });
+    const t1 = await r1.text();
+    let j1 = null;
+    try { j1 = JSON.parse(t1); } catch (_) {}
+    const u1 = j1?.files?.[0]?.url || extract_url_from_text_or_obj(j1, t1);
+    if (u1) return { provider: "uguu.se", url: u1 };
+  } catch (_) {}
+
+  // Fallback 2: 0x0.st
+  try {
+    const f2 = new FormData();
+    f2.append("file", file, fileName);
+    const r2 = await fetch("https://0x0.st", {
+      method: "POST",
+      body: f2,
+      headers: { "User-Agent": UA },
+    });
+    const t2 = await r2.text();
+    const u2 = extract_url_from_text_or_obj(null, t2);
+    if (u2) return { provider: "0x0.st", url: u2 };
+  } catch (_) {}
+
+  // Fallback 3: catbox.moe
+  try {
+    const f3 = new FormData();
+    f3.append("reqtype", "fileupload");
+    f3.append("fileToUpload", file, fileName);
+    const r3 = await fetch("https://catbox.moe/user/api.php", {
+      method: "POST",
+      body: f3,
+      headers: { "User-Agent": UA },
+    });
+    const t3 = await r3.text();
+    const u3 = extract_url_from_text_or_obj(null, t3);
+    if (u3) return { provider: "catbox.moe", url: u3 };
+  } catch (_) {}
+
+  return { provider: null, url: null };
 }
 
 async function handle_upload(request) {
@@ -246,40 +327,19 @@ async function handle_upload(request) {
     return json_res({ ok: false, error: "Missing 'file' upload field" }, 400);
   }
 
-  const forwardForm = new FormData();
-  forwardForm.append("file", file, file.name || "upload.bin");
   const toolHint = formData.get("tool");
-  if (toolHint) {
-    forwardForm.append("tool", String(toolHint));
-  }
+  const i2uRes = await try_image2url_upload(file, toolHint);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  let finalUrl = i2uRes.url;
+  let hostUsed = finalUrl ? i2uRes.provider : null;
 
-  let upstreamData = null;
-  let rawText = "";
-  try {
-    const res = await fetch(UPLOAD_API, {
-      method: "POST",
-      body: forwardForm,
-      signal: controller.signal,
-      headers: {
-        "User-Agent": UA,
-        Origin: BASE_URL,
-        Referer: TOOLS_URL,
-      },
-    });
-    rawText = await res.text();
-    try {
-      upstreamData = JSON.parse(rawText);
-    } catch (_) {
-      upstreamData = { rawText, status: res.status };
+  if (!finalUrl) {
+    const fb = await try_fallback_hosts(file);
+    if (fb.url) {
+      finalUrl = fb.url;
+      hostUsed = fb.provider;
     }
-  } finally {
-    clearTimeout(timer);
   }
-
-  const generatedUrl = extract_url_from_upload_response(upstreamData, rawText);
 
   const fname = (file.name || "").toLowerCase();
   let detectedType = "file-url";
@@ -289,11 +349,12 @@ async function handle_upload(request) {
   else if (/\.(png|jpg|jpeg|webp|bmp)$/.test(fname)) detectedType = "image-url";
 
   return json_res({
-    ok: Boolean(generatedUrl),
+    ok: Boolean(finalUrl),
     type: detectedType,
     fileName: file.name || null,
-    url: generatedUrl,
-    upstream: upstreamData,
+    url: finalUrl,
+    host: hostUsed,
+    upstream: i2uRes.upstream || i2uRes.error || null,
   });
 }
 
