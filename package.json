@@ -1,10 +1,12 @@
 {
-  "name": "image-cloudflare-worker",
+  "name": "shadow-image2url-worker",
   "version": "1.0.0",
+  "description": "Creator - 👨‍💻 SHADOW MOVIE X MAIN OWNER 👨‍💻 | Image2URL Scraper & Uploader Worker",
+  "main": "src/worker.js",
   "private": true,
   "scripts": {
-    "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^3.99.0"
