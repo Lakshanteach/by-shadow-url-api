@@ -1,5 +1,10 @@
+// Creator - 👨‍💻 SHADOW MOVIE X MAIN OWNER 👨‍💻
 {
-  "name": "cinema-lk-scraper",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shadow-image2url-api",
   "main": "src/worker.js",
-  "compatibility_date": "2026-11-01"
+  "compatibility_date": "2026-11-22",
+  "observability": {
+    "enabled": true
+  }
 }
