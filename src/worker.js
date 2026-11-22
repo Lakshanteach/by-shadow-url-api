@@ -60,8 +60,10 @@ function classify_tool(name = "", url = "") {
   if (/gif/.test(hay)) return "gif-to-url";
   if (/video/.test(hay)) return "video-to-url";
   if (/pdf|doc|document/.test(hay)) return "pdf-to-url";
-  if (/image|img|converter|resize|crop|enhance/.test(hay)) return "image-to-url";
-  if (/file|bulk|upload/.test(hay)) return "file-to-url";
+  if (/file-to-url|bulk|compress-file|zip/.test(hay)) return "file-to-url";
+  if (/image|img|converter|resize|crop|enhance|photo|picture|webp|png|jpg|heic|svg|qr/.test(hay)) {
+    return "image-to-url";
+  }
   return "other-tools";
 }
 
@@ -121,7 +123,11 @@ async function scrape_tools_page(targetPageUrl = TOOLS_URL) {
     if (!parsed.hostname.endsWith("image2url.com")) continue;
 
     const pathname = parsed.pathname.toLowerCase();
-    if (pathname === "/" || /privacy|terms|cookie|login|signin|sign-in/.test(pathname)) {
+    if (
+      pathname === "/" ||
+      pathname.includes("/cdn-cgi/") ||
+      /privacy|terms|cookie|login|signin|sign-in|pricing|blog|about/.test(pathname)
+    ) {
       continue;
     }
 
@@ -143,6 +149,15 @@ async function scrape_tools_page(targetPageUrl = TOOLS_URL) {
 
     const parsed = new URL(fullUrl);
     if (!parsed.hostname.endsWith("image2url.com")) continue;
+
+    const pathname = parsed.pathname.toLowerCase();
+    if (
+      pathname === "/" ||
+      pathname.includes("/cdn-cgi/") ||
+      /privacy|terms|cookie|login|signin|sign-in/.test(pathname)
+    ) {
+      continue;
+    }
 
     const key = `${fullUrl}|route`;
     if (seen.has(key)) continue;
@@ -187,6 +202,35 @@ async function scrape_tools_page(targetPageUrl = TOOLS_URL) {
   };
 }
 
+function extract_url_from_upload_response(data, rawText = "") {
+  if (data && typeof data === "object") {
+    const candidates = [
+      data.url,
+      data.link,
+      data.fileUrl,
+      data.file_url,
+      data.downloadUrl,
+      data.shortUrl,
+      data.data?.url,
+      data.data?.link,
+      data.data?.fileUrl,
+      data.result?.url,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && /^https?:\/\//i.test(c.trim())) {
+        return c.trim();
+      }
+    }
+  }
+
+  const textMatch = String(rawText || "").match(
+    /https?:\/\/(?:www\.)?image2url\.com\/[^\s"'<>`\\)]+/i
+  );
+  if (textMatch) return textMatch[0];
+
+  return null;
+}
+
 async function handle_upload(request) {
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.toLowerCase().includes("multipart/form-data")) {
@@ -213,6 +257,7 @@ async function handle_upload(request) {
   const timer = setTimeout(() => controller.abort(), 30000);
 
   let upstreamData = null;
+  let rawText = "";
   try {
     const res = await fetch(UPLOAD_API, {
       method: "POST",
@@ -224,23 +269,17 @@ async function handle_upload(request) {
         Referer: TOOLS_URL,
       },
     });
-    const txt = await res.text();
+    rawText = await res.text();
     try {
-      upstreamData = JSON.parse(txt);
+      upstreamData = JSON.parse(rawText);
     } catch (_) {
-      upstreamData = { rawText: txt, status: res.status };
+      upstreamData = { rawText, status: res.status };
     }
   } finally {
     clearTimeout(timer);
   }
 
-  const generatedUrl =
-    upstreamData?.url ||
-    upstreamData?.link ||
-    upstreamData?.fileUrl ||
-    upstreamData?.data?.url ||
-    upstreamData?.data?.link ||
-    null;
+  const generatedUrl = extract_url_from_upload_response(upstreamData, rawText);
 
   const fname = (file.name || "").toLowerCase();
   let detectedType = "file-url";
